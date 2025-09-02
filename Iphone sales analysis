@@ -1,0 +1,345 @@
+# ------- IMPORTS & SETTINGS -------
+import os
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import warnings
+warnings.filterwarnings('ignore')
+
+# Optional modeling libraries (install if missing)
+# !pip install statsmodels scikit-learn pmdarima
+from sklearn.linear_model import LinearRegression
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error, r2_score
+import statsmodels.api as sm
+import statsmodels.tsa.api as tsa
+
+# ----- USER SETTINGS -----
+DATA_PATH = r"C:\Himansh Upadhyay\HiLyst Analystics\Chart Video\Iphone_Dataset.csv"
+
+# Output folder for saving charts and cleaned data (will be created if not exists)
+OUT_DIR = r"C:\Himansh Upadhyay\HiLyst Analystics\Chart Video\Outputs"
+os.makedirs(OUT_DIR, exist_ok=True)
+
+# Professional color palette (hex values, change if you want different look)
+PROF_PALETTE = {
+    'blue':'#1f4e79',        # deep professional blue
+    'teal':'#2a9d8f',        # calm teal
+    'gold':'#e9c46a',        # muted gold
+    'coral':'#f28482',       # soft coral
+    'gray':'#6c757d',        # neutral gray
+    'green':'#2d6a4f'        # deep green
+}
+sns.set_style("whitegrid")
+plt.rcParams.update({'figure.dpi':120, 'axes.titlesize':14, 'axes.labelsize':12})
+
+# ------- LOAD DATA -------
+print("Loading data from:", DATA_PATH)
+df = pd.read_csv(DATA_PATH)
+print("Loaded shape:", df.shape)
+display(df.head(10))
+
+
+# Convert Year to datetime index for time-series friendly handling
+if 'Year' in df.columns:
+    # create a datetime index at year-start for plotting/time series
+    df['Year_dt'] = pd.to_datetime(df['Year'].astype(int).astype(str) + '-01-01')
+    df.set_index('Year_dt', inplace=True)
+
+# Convert numeric columns possibly with commas to numeric
+for col in df.columns:
+    if df[col].dtype == object:
+        # try to convert
+        df[col] = df[col].str.replace(',', '').astype(float, errors='ignore')
+
+# Show dtypes and missing
+print("\nData types and missing values:")
+display(df.info())
+display(df.isnull().sum())
+
+# ------- MISSING VALUE STRATEGY -------
+# We'll keep two approaches:
+# 1) For columns with few missing values -> impute with mean or linear interpolation
+# 2) For columns with significant missing -> keep as-is but forward/backward fill if logical
+
+# summary
+missing = df.isnull().sum()
+print("\nMissing by column:\n", missing)
+
+# Impute numeric columns with interpolation where time series makes sense
+numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+print("\nNumeric cols:", numeric_cols)
+
+# For percentage/market share columns -> linear interpolation then mean fallback
+for col in ['Percentage_of_iPhone_Users', 'iOS_Market_Share', 'Android_Market_Share', 'No_of_iPhone_Sold_USA']:
+    if col in df.columns:
+        df[col] = df[col].interpolate(method='linear', limit_direction='both')
+        df[col].fillna(df[col].mean(), inplace=True)
+
+# If any remaining numeric nulls -> fill with median
+df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].median())
+
+print("\nAfter imputation missing:")
+display(df.isnull().sum())
+
+# Save cleaned data
+cleaned_path = os.path.join(OUT_DIR, "Iphone_Dataset_cleaned.csv")
+df.to_csv(cleaned_path)
+print("Cleaned data saved to:", cleaned_path)
+
+# ------- OUTLIER DETECTION (Z-score) -------
+from scipy.stats import zscore
+zs = df[numeric_cols].apply(zscore).abs()
+outlier_mask = (zs > 3)
+outlier_counts = outlier_mask.sum()
+print("\nOutlier counts (Z>3) per column:\n", outlier_counts)
+
+# Mark rows having any outlier
+df['is_outlier'] = outlier_mask.any(axis=1)
+display(df[df['is_outlier']])
+
+# For visualization we'll keep original values but note outliers.
+
+# ------- VISUALIZATIONS (Professional Colors) -------
+# 1) Trend of Users & Sales
+plt.figure(figsize=(10,5))
+plt.plot(df.index.year, df['No_of_iPhone_Users'], marker='o', label='Global iPhone Users', linewidth=2, color=PROF_PALETTE['blue'])
+plt.plot(df.index.year, df['No_of_iPhone_Users_USA'], marker='o', label='USA iPhone Users', linewidth=2, color=PROF_PALETTE['teal'])
+plt.title('Trend of iPhone Users Over Years')
+plt.xlabel('Year')
+plt.ylabel('Number of Users')
+plt.legend()
+plt.tight_layout()
+plt.savefig(os.path.join(OUT_DIR, "trend_users.png"))
+plt.show()
+
+plt.figure(figsize=(10,5))
+plt.plot(df.index.year, df['No_of_iPhone_Sold'], marker='o', label='Global iPhone Sales', linewidth=2, color=PROF_PALETTE['gold'])
+plt.plot(df.index.year, df['No_of_iPhone_Sold_USA'], marker='o', label='USA iPhone Sales', linewidth=2, color=PROF_PALETTE['coral'])
+plt.title('Trend of iPhone Sales Over Years')
+plt.xlabel('Year')
+plt.ylabel('Number of iPhones Sold')
+plt.legend()
+plt.tight_layout()
+plt.savefig(os.path.join(OUT_DIR, "trend_sales.png"))
+plt.show()
+
+# 2) Market share comparison
+plt.figure(figsize=(10,5))
+plt.plot(df.index.year, df['iOS_Market_Share'], marker='o', label='iOS Market Share', linewidth=2, color=PROF_PALETTE['blue'])
+plt.plot(df.index.year, df['Android_Market_Share'], marker='o', label='Android Market Share', linewidth=2, color=PROF_PALETTE['gray'])
+plt.title('iOS vs Android Market Share Over Years')
+plt.xlabel('Year')
+plt.ylabel('Market Share (%)')
+plt.legend()
+plt.tight_layout()
+plt.savefig(os.path.join(OUT_DIR, "market_share_trend.png"))
+plt.show()
+
+# Pie chart for latest year (cleaned)
+latest = df.iloc[-1]
+plt.figure(figsize=(6,6))
+plt.pie([latest['iOS_Market_Share'], latest['Android_Market_Share']],
+        labels=['iOS','Android'],
+        autopct='%1.1f%%', startangle=140)
+plt.title(f'Market Share Distribution in {df.index.year[-1]}')
+plt.tight_layout()
+plt.savefig(os.path.join(OUT_DIR, "market_share_pie_latest.png"))
+plt.show()
+
+# 3) Boxplots with palette
+plt.figure(figsize=(12,6))
+sns.boxplot(data=df[numeric_cols].drop(columns=['Year'], errors='ignore'), palette=list(PROF_PALETTE.values()))
+plt.title('Boxplot of Numeric Features')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.savefig(os.path.join(OUT_DIR, "boxplots_numeric.png"))
+plt.show()
+
+# 4) Correlation heatmap (annotated)
+plt.figure(figsize=(10,8))
+corr = df[numeric_cols].corr()
+sns.heatmap(corr, annot=True, cmap='vlag', center=0, linewidths=0.5)
+plt.title('Correlation Matrix (numeric features)')
+plt.tight_layout()
+plt.savefig(os.path.join(OUT_DIR, "correlation_matrix.png"))
+plt.show()
+
+# 5) Scatter: Users vs Sales with regression line
+plt.figure(figsize=(8,6))
+sns.regplot(x='No_of_iPhone_Users', y='No_of_iPhone_Sold', data=df, scatter_kws={'s':70}, line_kws={'linewidth':2, 'color':PROF_PALETTE['blue']})
+plt.title('Relationship Between Number of iPhone Users and iPhones Sold')
+plt.xlabel('Number of iPhone Users')
+plt.ylabel('Number of iPhones Sold')
+plt.tight_layout()
+plt.savefig(os.path.join(OUT_DIR, "users_vs_sales_regplot.png"))
+plt.show()
+
+# ------- FEATURE ENGINEERING -------
+# Growth rates
+df['User_Growth_Rate'] = df['No_of_iPhone_Users'].pct_change() * 100
+df['Sales_Growth_Rate'] = df['No_of_iPhone_Sold'].pct_change() * 100
+df['iOS_Market_Share_Growth_Rate'] = df['iOS_Market_Share'].pct_change() * 100
+
+# Rolling stats
+df['Users_RollingMean_3yr'] = df['No_of_iPhone_Users'].rolling(window=3).mean()
+df['Users_RollingStd_3yr'] = df['No_of_iPhone_Users'].rolling(window=3).std()
+
+display(df[['No_of_iPhone_Users','User_Growth_Rate','No_of_iPhone_Sold','Sales_Growth_Rate']].head(8))
+
+# Plot growth rates
+plt.figure(figsize=(10,6))
+plt.plot(df.index.year, df['User_Growth_Rate'], marker='o', label='User Growth Rate', linewidth=2, color=PROF_PALETTE['green'])
+plt.plot(df.index.year, df['Sales_Growth_Rate'], marker='o', label='Sales Growth Rate', linewidth=2, color=PROF_PALETTE['coral'])
+plt.plot(df.index.year, df['iOS_Market_Share_Growth_Rate'], marker='o', label='iOS Market Share Growth', linewidth=2, color=PROF_PALETTE['teal'])
+plt.title('Yearly Growth Rates')
+plt.xlabel('Year')
+plt.ylabel('Growth Rate (%)')
+plt.legend()
+plt.tight_layout()
+plt.savefig(os.path.join(OUT_DIR, "growth_rates.png"))
+plt.show()
+
+# ------- PCA (for dimensionality reduction / visualization) -------
+# Use relevant numeric columns
+pca_cols = ['No_of_iPhone_Users','No_of_iPhone_Users_USA','No_of_iPhone_Sold','No_of_iPhone_Sold_USA','iOS_Market_Share','Android_Market_Share']
+pca_df = df[pca_cols].dropna()
+scaler = StandardScaler()
+pca_scaled = scaler.fit_transform(pca_df)
+
+pca = PCA(n_components=2)
+pca_res = pca.fit_transform(pca_scaled)
+pca_df_plot = pd.DataFrame(pca_res, index=pca_df.index, columns=['PC1','PC2'])
+
+plt.figure(figsize=(8,6))
+plt.scatter(pca_df_plot['PC1'], pca_df_plot['PC2'], s=80, c=range(len(pca_df_plot)), cmap='viridis')
+for i, txt in enumerate(pca_df_plot.index.year):
+    plt.annotate(txt, (pca_df_plot['PC1'].iloc[i], pca_df_plot['PC2'].iloc[i]), fontsize=9, alpha=0.8)
+plt.title('PCA of Key Metrics (2 components)')
+plt.xlabel('PC1'); plt.ylabel('PC2')
+plt.tight_layout()
+plt.savefig(os.path.join(OUT_DIR, "pca_keymetrics.png"))
+plt.show()
+
+# ------- K-Means CLUSTERING (small dataset) -------
+# We'll cluster based on scaled features
+kmeans = KMeans(n_clusters=2, random_state=42)
+kmeans.fit(pca_scaled)
+clusters = kmeans.labels_
+pca_df_plot['cluster'] = clusters
+
+plt.figure(figsize=(8,6))
+sns.scatterplot(x='PC1', y='PC2', hue='cluster', data=pca_df_plot, palette=['#1f4e79','#e9c46a'], s=80)
+plt.title('KMeans Clusters on PCA space')
+plt.legend(title='Cluster')
+plt.tight_layout()
+plt.savefig(os.path.join(OUT_DIR, "kmeans_pca.png"))
+plt.show()
+
+# ------- SIMPLE TIME SERIES MODELLING (No_of_iPhone_Users) -------
+# Because dataset is small (annual 2011-2023), keep model simple: ARIMA on Users
+ts = df['No_of_iPhone_Users'].astype(float)
+ts = ts.asfreq('YS')  # yearly start frequency
+ts.fillna(method='ffill', inplace=True)
+
+# Try a simple seasonal_decompose (trend/seasonal/resid) - limited value with annual 13 points but okay to show
+try:
+    decomposition = tsa.seasonal_decompose(ts, model='additive', period=3)
+    fig = decomposition.plot()
+    fig.set_size_inches(10,6)
+    plt.suptitle('Seasonal Decompose (Users)')
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUT_DIR, "users_decompose.png"))
+    plt.show()
+except Exception as e:
+    print("Decompose skipped (small series):", e)
+
+# Fit ARIMA (auto) using statsmodels' simple ARIMA search
+# We'll try small p,d,q due to small sample
+best_aic = np.inf
+best_order = None
+best_model = None
+for p in range(0,3):
+    for d in range(0,2):
+        for q in range(0,3):
+            try:
+                model = tsa.ARIMA(ts, order=(p,d,q)).fit()
+                if model.aic < best_aic:
+                    best_aic = model.aic
+                    best_order = (p,d,q)
+                    best_model = model
+            except:
+                continue
+
+print("Best ARIMA order:", best_order, "AIC:", best_aic)
+if best_model is not None:
+    # Forecast next 3 years
+    fc = best_model.get_forecast(steps=3)
+    fc_df = fc.summary_frame()
+    print(fc_df)
+    # Plot
+    plt.figure(figsize=(10,5))
+    plt.plot(ts.index.year, ts.values, marker='o', label='Observed', color=PROF_PALETTE['blue'])
+    future_years = [ts.index.year[-1]+i for i in range(1,4)]
+    plt.plot(future_years, fc_df['mean'].values, marker='o', linestyle='--', label='Forecast', color=PROF_PALETTE['coral'])
+    plt.fill_between(future_years, fc_df['mean_ci_lower'].values, fc_df['mean_ci_upper'].values, alpha=0.2)
+    plt.title('ARIMA Forecast for No_of_iPhone_Users (next 3 years)')
+    plt.xlabel('Year')
+    plt.ylabel('Number of Users')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUT_DIR, "users_arima_forecast.png"))
+    plt.show()
+else:
+    print("ARIMA model could not be fitted reliably on this small dataset.")
+
+# ------- REGRESSION: Predict Sales from Users and Market Share -------
+reg_df = df.dropna(subset=['No_of_iPhone_Users','iOS_Market_Share','No_of_iPhone_Sold'])
+X = reg_df[['No_of_iPhone_Users','iOS_Market_Share']].values.reshape(len(reg_df),2)
+y = reg_df['No_of_iPhone_Sold'].values
+
+# Fit linear regression
+lr = LinearRegression()
+lr.fit(X, y)
+y_pred = lr.predict(X)
+print("Regression coefficients:", lr.coef_, "Intercept:", lr.intercept_)
+print("R2 score:", r2_score(y, y_pred))
+print("RMSE:", np.sqrt(mean_squared_error(y, y_pred)))
+
+# Plot actual vs predicted
+plt.figure(figsize=(8,6))
+plt.scatter(y, y_pred, s=80, color=PROF_PALETTE['teal'])
+plt.plot([y.min(), y.max()], [y.min(), y.max()], 'k--', linewidth=1)
+plt.xlabel('Actual No_of_iPhone_Sold')
+plt.ylabel('Predicted No_of_iPhone_Sold')
+plt.title('Actual vs Predicted (Linear Regression)')
+plt.tight_layout()
+plt.savefig(os.path.join(OUT_DIR, "regression_actual_vs_pred.png"))
+plt.show()
+
+# ------- EXPORT SUMMARY CSV (with engineered features) -------
+summary_path = os.path.join(OUT_DIR, "Iphone_Dataset_with_features.csv")
+df.to_csv(summary_path)
+print("Saved dataset with features to:", summary_path)
+
+# ------- PRINT KEY INSIGHTS (console) -------
+print("\nKEY INSIGHTS:")
+# 1. Latest year market share
+try:
+    latest_year = df.index.year[-1]
+    print(f"- Latest year in data: {latest_year}")
+    print(f"- iOS Market Share (latest): {df['iOS_Market_Share'].iloc[-1]:.2f}%")
+    print(f"- Android Market Share (latest): {df['Android_Market_Share'].iloc[-1]:.2f}%")
+except:
+    pass
+
+# 2. Growth info
+print(f"- Average yearly user growth (mean): {df['User_Growth_Rate'].mean():.2f}%")
+print(f"- Year with highest user growth: {df['User_Growth_Rate'].idxmax().year if df['User_Growth_Rate'].idxmax() is not None else 'N/A'}")
+
+# 3. Save a quick PDF/PNG summary? (For video thumbnails you can use the saved PNGs in Outputs folder)
+print("\nAll charts saved to:", OUT_DIR)
+print("End of script.")
